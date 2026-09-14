@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from cas.models import Opportunity, TriangularOpportunity
+from cas.models import HybridOpportunity, Opportunity, TriangularOpportunity
 
 
 class TelegramNotifier:
@@ -43,7 +43,9 @@ class TelegramNotifier:
         )
         await self._send_text(text)
 
-    async def send_triangular_opportunity(self, opportunity: TriangularOpportunity) -> None:
+    async def send_triangular_opportunity(
+        self, opportunity: TriangularOpportunity
+    ) -> None:
         leg_lines = []
         for index, leg in enumerate(opportunity.legs, start=1):
             leg_lines.append(
@@ -59,10 +61,45 @@ class TelegramNotifier:
             f"Старт: {opportunity.start_amount:.2f} {opportunity.anchor_asset}\n"
             + "\n".join(leg_lines)
             + "\n"
-            f"Расчётные издержки: {opportunity.estimated_costs_quote:.4f} {opportunity.anchor_asset}\n"
+            f"Расчётные издержки: {opportunity.estimated_costs_quote:.4f} "
+            f"{opportunity.anchor_asset}\n"
             f"Финиш: {opportunity.final_amount:.4f} {opportunity.anchor_asset}\n"
             f"Net: {opportunity.net_profit_quote:.4f} {opportunity.anchor_asset} "
             f"({opportunity.net_profit_pct:.3f}%)\n\n"
             "Это оценка по публичным стаканам; комиссии и исполнение могут отличаться."
         )
         await self._send_text(text)
+
+    async def send_hybrid_opportunity(self, opportunity: HybridOpportunity) -> None:
+        status = (
+            "⚠️ ПОДОЗРИТЕЛЬНАЯ КОТИРОВКА"
+            if opportunity.suspicious
+            else "🔁 Гибридная связка"
+        )
+        lines = [
+            status,
+            f"Маршрут: {' → '.join(opportunity.path)}",
+            f"Биржа: {opportunity.exchange}",
+            f"Внешний обменник: {opportunity.provider}",
+            f"Старт: {opportunity.start_amount:.4f} {opportunity.anchor_asset}",
+        ]
+        for index, leg in enumerate(opportunity.legs, start=1):
+            lines.append(
+                f"{index}. {leg.venue}: {leg.input_amount:.8f} {leg.from_asset} → "
+                f"{leg.output_amount:.8f} {leg.to_asset}"
+            )
+        lines.extend(
+            [
+                f"Финиш: {opportunity.final_amount:.4f} {opportunity.anchor_asset}",
+                f"Net: {opportunity.net_profit_quote:.4f} {opportunity.anchor_asset} "
+                f"({opportunity.net_profit_pct:.3f}%)",
+                f"Отклонение внешней котировки от spot: "
+                f"{opportunity.external_premium_pct:.2f}%",
+            ]
+        )
+        if opportunity.suspicious_reason:
+            lines.append(f"Причина флага: {opportunity.suspicious_reason}")
+        lines.append(
+            "Бот не переводит средства и не исполняет эту связку автоматически."
+        )
+        await self._send_text("\n".join(lines))

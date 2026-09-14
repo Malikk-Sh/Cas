@@ -6,6 +6,8 @@ import time
 
 from cas.config import get_settings
 from cas.exchanges import ExchangePool
+from cas.external_quotes import providers_from_json
+from cas.hybrid import HybridRouteScanner
 from cas.notifier import TelegramNotifier
 from cas.scanner import ArbitrageScanner
 from cas.triangular import TriangularArbitrageScanner
@@ -19,7 +21,10 @@ logger = logging.getLogger("cas")
 
 async def run() -> None:
     settings = get_settings()
-    pool = ExchangePool(settings.exchange_ids)
+    all_exchange_ids = list(
+        dict.fromkeys(settings.exchange_ids + settings.hybrid_exchange_ids)
+    )
+    pool = ExchangePool(all_exchange_ids)
     notifier = TelegramNotifier(
         settings.telegram_bot_token,
         settings.telegram_chat_id,
@@ -43,15 +48,33 @@ async def run() -> None:
         max_cycles=settings.triangular_max_cycles,
         exchange_fee_rates=settings.exchange_taker_fee_rates,
     )
+    providers = providers_from_json(settings.external_quote_providers_json)
+    hybrid_scanner = HybridRouteScanner(
+        pool,
+        anchor_asset=settings.hybrid_anchor_asset,
+        start_amount=settings.hybrid_start_amount_usdt,
+        route_pairs=settings.hybrid_route_pair_list,
+        providers=providers,
+        depth_limit=settings.depth_limit,
+        taker_fee_rate=settings.taker_fee_rate,
+        fixed_cost_rate=settings.fixed_cost_rate,
+        max_external_premium_pct=settings.hybrid_max_external_premium_pct,
+        exchange_fee_rates=settings.exchange_taker_fee_rates,
+    )
     last_alert_at: dict[str, float] = {}
 
     logger.info(
-        "Starting scanner: exchanges=%s interexchange=%s triangular=%s notional=%.2f",
-        ",".join(settings.exchange_ids),
+        "Starting scanner: exchanges=%s interexchange=%s triangular=%s hybrid=%s notional=%.2f",
+        ",".join(all_exchange_ids),
         settings.interexchange_enabled,
         settings.triangular_enabled,
+        settings.hybrid_enabled,
         settings.notional_usdt,
     )
+    if settings.hybrid_enabled and not providers:
+        logger.warning(
+            "Hybrid mode is enabled but CAS_EXTERNAL_QUOTE_PROVIDERS_JSON is empty"
+        )
 
     await pool.start()
     try:
@@ -91,7 +114,8 @@ async def run() -> None:
                 triangular_actionable = [
                     item
                     for item in triangular
-                    if item.net_profit_pct >= settings.triangular_min_net_profit_pct
+                    if item.net_profit_pct
+                    >= settings.triangular_min_net_profit_pct
                 ]
             else:
                 triangular_actionable = []
@@ -112,6 +136,51 @@ async def run() -> None:
                     settings.triangular_min_net_profit_pct,
                 )
 
+            if settings.hybrid_enabled and providers:
+                hybrid = await hybrid_scanner.scan(settings.hybrid_exchange_ids)
+                suspicious = [item for item in hybrid if item.suspicious]
+                hybrid_actionable = [
+                    item
+                    for item in hybrid
+                    if item.net_profit_pct >= settings.hybrid_min_net_profit_pct
+                    and (
+                        settings.hybrid_allow_suspicious
+                        or not item.suspicious
+                    )
+                ]
+            else:
+                suspicious = []
+                hybrid_actionable = []
+
+            if suspicious:
+                worst = max(
+                    suspicious,
+                    key=lambda item: item.external_premium_pct,
+                )
+                logger.warning(
+                    "Rejected suspicious quote: %s via %s | premium %.2f%% | %s",
+                    " -> ".join(worst.path),
+                    worst.provider,
+                    worst.external_premium_pct,
+                    worst.suspicious_reason,
+                )
+
+            if hybrid_actionable:
+                best_hybrid = hybrid_actionable[0]
+                logger.info(
+                    "Hybrid best: %s via %s | net %.4f %s (%.3f%%)",
+                    " -> ".join(best_hybrid.path),
+                    best_hybrid.provider,
+                    best_hybrid.net_profit_quote,
+                    best_hybrid.anchor_asset,
+                    best_hybrid.net_profit_pct,
+                )
+            elif settings.hybrid_enabled and providers:
+                logger.info(
+                    "No safe hybrid opportunity above %.3f%%",
+                    settings.hybrid_min_net_profit_pct,
+                )
+
             now = time.monotonic()
             for opportunity in actionable:
                 last_sent = last_alert_at.get(opportunity.key, 0.0)
@@ -122,7 +191,9 @@ async def run() -> None:
                     if notifier.enabled:
                         last_alert_at[opportunity.key] = now
                 except Exception as exc:
-                    logger.warning("Telegram interexchange alert failed: %s", exc)
+                    logger.warning(
+                        "Telegram interexchange alert failed: %s", exc
+                    )
 
             for opportunity in triangular_actionable:
                 last_sent = last_alert_at.get(opportunity.key, 0.0)
@@ -133,10 +204,25 @@ async def run() -> None:
                     if notifier.enabled:
                         last_alert_at[opportunity.key] = now
                 except Exception as exc:
-                    logger.warning("Telegram triangular alert failed: %s", exc)
+                    logger.warning(
+                        "Telegram triangular alert failed: %s", exc
+                    )
+
+            for opportunity in hybrid_actionable:
+                last_sent = last_alert_at.get(opportunity.key, 0.0)
+                if now - last_sent < settings.alert_cooldown_seconds:
+                    continue
+                try:
+                    await notifier.send_hybrid_opportunity(opportunity)
+                    if notifier.enabled:
+                        last_alert_at[opportunity.key] = now
+                except Exception as exc:
+                    logger.warning("Telegram hybrid alert failed: %s", exc)
 
             elapsed = time.monotonic() - started_at
-            await asyncio.sleep(max(0.0, settings.poll_interval_seconds - elapsed))
+            await asyncio.sleep(
+                max(0.0, settings.poll_interval_seconds - elapsed)
+            )
     finally:
         await pool.close()
 
