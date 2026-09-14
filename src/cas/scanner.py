@@ -71,12 +71,17 @@ class ArbitrageScanner:
         taker_fee_rate: float,
         fixed_cost_rate: float,
         depth_limit: int,
+        exchange_fee_rates: dict[str, float] | None = None,
     ) -> None:
         self.pool = pool
         self.notional_quote = notional_quote
         self.taker_fee_rate = taker_fee_rate
         self.fixed_cost_rate = fixed_cost_rate
         self.depth_limit = depth_limit
+        self.exchange_fee_rates = exchange_fee_rates or {}
+
+    def _fee_rate(self, exchange_id: str) -> float:
+        return self.exchange_fee_rates.get(exchange_id, self.taker_fee_rate)
 
     async def scan_symbol(self, symbol: str) -> list[Opportunity]:
         books = await self.pool.fetch_symbol_books(symbol, self.depth_limit)
@@ -98,8 +103,8 @@ class ArbitrageScanner:
 
             gross_profit = quote_received - self.notional_quote
             trading_costs = (
-                self.notional_quote * self.taker_fee_rate
-                + quote_received * self.taker_fee_rate
+                self.notional_quote * self._fee_rate(buy_exchange)
+                + quote_received * self._fee_rate(sell_exchange)
             )
             fixed_costs = self.notional_quote * self.fixed_cost_rate
             total_costs = trading_costs + fixed_costs

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Iterable
 
 import ccxt.async_support as ccxt
 
@@ -40,6 +40,10 @@ class ExchangePool:
             return_exceptions=True,
         )
 
+    def market_map(self, exchange_id: str) -> dict[str, dict[str, Any]]:
+        exchange = self.exchanges[exchange_id]
+        return exchange.markets
+
     async def fetch_order_book(
         self,
         exchange_id: str,
@@ -66,5 +70,27 @@ class ExchangePool:
         return {
             exchange_id: book
             for exchange_id, book in zip(ids, books, strict=True)
+            if book is not None and book.get("asks") and book.get("bids")
+        }
+
+    async def fetch_exchange_books(
+        self,
+        exchange_id: str,
+        symbols: Iterable[str],
+        limit: int,
+        *,
+        concurrency: int = 8,
+    ) -> dict[str, dict[str, Any]]:
+        unique_symbols = list(dict.fromkeys(symbols))
+        semaphore = asyncio.Semaphore(max(1, concurrency))
+
+        async def fetch_one(symbol: str) -> tuple[str, dict[str, Any] | None]:
+            async with semaphore:
+                return symbol, await self.fetch_order_book(exchange_id, symbol, limit)
+
+        results = await asyncio.gather(*(fetch_one(symbol) for symbol in unique_symbols))
+        return {
+            symbol: book
+            for symbol, book in results
             if book is not None and book.get("asks") and book.get("bids")
         }

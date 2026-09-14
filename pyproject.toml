@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cas-arbitrage-scanner"
-version = "0.1.0"
-description = "Spot crypto arbitrage scanner with Telegram alerts"
+version = "0.2.0"
+description = "Spot crypto arbitrage scanner with interexchange and triangular routes"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
