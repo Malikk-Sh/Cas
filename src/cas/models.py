@@ -61,3 +61,39 @@ class TriangularOpportunity:
     @property
     def key(self) -> str:
         return f"tri:{self.exchange}:{'->'.join(self.path)}"
+
+
+@dataclass(slots=True, frozen=True)
+class HybridLeg:
+    venue: str
+    kind: str
+    from_asset: str
+    to_asset: str
+    input_amount: float
+    output_amount: float
+    detail: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class HybridOpportunity:
+    exchange: str
+    provider: str
+    anchor_asset: str
+    path: tuple[str, str, str, str]
+    start_amount: float
+    final_amount: float
+    net_profit_quote: float
+    net_profit_pct: float
+    external_premium_pct: float
+    suspicious: bool
+    suspicious_reason: str
+    legs: tuple[HybridLeg, HybridLeg, HybridLeg]
+    detected_at: datetime
+
+    @classmethod
+    def now(cls, **kwargs: object) -> "HybridOpportunity":
+        return cls(detected_at=datetime.now(timezone.utc), **kwargs)  # type: ignore[arg-type]
+
+    @property
+    def key(self) -> str:
+        return f"hybrid:{self.exchange}:{self.provider}:{'->'.join(self.path)}"
