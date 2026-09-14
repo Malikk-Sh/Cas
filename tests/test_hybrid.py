@@ -28,10 +28,9 @@ class Pool:
         }
 
 
-@pytest.mark.asyncio
-async def test_hybrid_profitable_route() -> None:
-    scanner = HybridRouteScanner(
-        Pool(),
+def scanner(pool: Pool | None = None) -> HybridRouteScanner:
+    return HybridRouteScanner(
+        pool or Pool(),
         anchor_asset="USDT",
         start_amount=1000.0,
         route_pairs=[("BNB", "ETH")],
@@ -46,16 +45,29 @@ async def test_hybrid_profitable_route() -> None:
         fixed_cost_rate=0.0,
         max_external_premium_pct=5.0,
     )
-    items = await scanner.scan(["bybit"])
+
+
+@pytest.mark.asyncio
+async def test_hybrid_profitable_route() -> None:
+    items = await scanner().scan(["bybit"])
     assert len(items) == 1
     assert items[0].net_profit_pct == pytest.approx(2.09, abs=0.01)
     assert not items[0].suspicious
 
 
 @pytest.mark.asyncio
+async def test_live_p2p_amount_can_override_configured_notional() -> None:
+    items = await scanner().scan(["bybit"], start_amount=830.95)
+    assert len(items) == 1
+    assert items[0].start_amount == pytest.approx(830.95)
+    assert items[0].legs[0].input_amount == pytest.approx(830.95)
+    assert items[0].net_profit_pct == pytest.approx(2.09, abs=0.01)
+
+
+@pytest.mark.asyncio
 async def test_screenshot_like_impossible_quote_is_not_executable_without_depth() -> None:
     huge_rate = 2676.03 / 1.1535
-    scanner = HybridRouteScanner(
+    custom = HybridRouteScanner(
         Pool(),
         anchor_asset="USDT",
         start_amount=576.75,
@@ -71,7 +83,7 @@ async def test_screenshot_like_impossible_quote_is_not_executable_without_depth(
         fixed_cost_rate=0.0,
         max_external_premium_pct=5.0,
     )
-    items = await scanner.scan(["bybit"])
+    items = await custom.scan(["bybit"])
     assert items == []
 
 
@@ -97,7 +109,7 @@ class DeepPool(Pool):
 @pytest.mark.asyncio
 async def test_impossible_quote_is_flagged_when_depth_exists() -> None:
     huge_rate = 2676.03 / 1.1535
-    scanner = HybridRouteScanner(
+    custom = HybridRouteScanner(
         DeepPool(),
         anchor_asset="USDT",
         start_amount=576.75,
@@ -113,7 +125,7 @@ async def test_impossible_quote_is_flagged_when_depth_exists() -> None:
         fixed_cost_rate=0.0,
         max_external_premium_pct=5.0,
     )
-    items = await scanner.scan(["bybit"])
+    items = await custom.scan(["bybit"])
     assert len(items) == 1
     assert items[0].suspicious
     assert items[0].external_premium_pct > 100000.0
