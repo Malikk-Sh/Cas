@@ -23,12 +23,25 @@ class Settings(BaseSettings):
     taker_fee_bps: float = Field(default=10.0, ge=0.0)
     exchange_taker_fee_bps: str = ""
     fixed_cost_bps: float = Field(default=5.0, ge=0.0)
+
     interexchange_enabled: bool = True
+
     triangular_enabled: bool = True
     triangular_anchor_asset: str = "USDT"
     triangular_assets: str = "BTC,ETH,BNB,SOL,XRP,ADA,DOGE"
     triangular_max_cycles: int = Field(default=200, ge=1, le=5000)
     triangular_min_net_profit_pct: float = Field(default=0.20)
+
+    hybrid_enabled: bool = True
+    hybrid_exchanges: str = "bybit"
+    hybrid_anchor_asset: str = "USDT"
+    hybrid_route_pairs: str = "BNB:ETH"
+    hybrid_start_amount_usdt: float = Field(default=1000.0, gt=0)
+    hybrid_min_net_profit_pct: float = Field(default=0.20)
+    hybrid_max_external_premium_pct: float = Field(default=5.0, ge=0.0)
+    hybrid_allow_suspicious: bool = False
+    external_quote_providers_json: str = "[]"
+
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
@@ -71,6 +84,28 @@ class Settings(BaseSettings):
         if not value or value == "*":
             return None
         return {item.strip().upper() for item in value.split(",") if item.strip()}
+
+    @property
+    def hybrid_exchange_ids(self) -> list[str]:
+        return [
+            item.strip().lower()
+            for item in self.hybrid_exchanges.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def hybrid_route_pair_list(self) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for item in self.hybrid_route_pairs.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+            first, second = item.split(":", 1)
+            first = first.strip().upper()
+            second = second.strip().upper()
+            if first and second and first != second:
+                pairs.append((first, second))
+        return pairs
 
 
 @lru_cache(maxsize=1)
