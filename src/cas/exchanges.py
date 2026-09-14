@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 import ccxt.async_support as ccxt
 
+from cas.execution import canonical_network
+
 
 class ExchangePool:
     def __init__(self, exchange_ids: list[str]) -> None:
@@ -43,6 +45,73 @@ class ExchangePool:
     def market_map(self, exchange_id: str) -> dict[str, dict[str, Any]]:
         exchange = self.exchanges[exchange_id]
         return exchange.markets
+
+    def normalize_amount(
+        self,
+        exchange_id: str,
+        symbol: str,
+        amount: float,
+    ) -> float | None:
+        """Round an amount using the exchange's market precision rules."""
+        if amount <= 0:
+            return None
+        exchange = self.exchanges[exchange_id]
+        try:
+            normalized = float(exchange.amount_to_precision(symbol, amount))
+        except Exception:
+            return None
+        return normalized if normalized > 0 else None
+
+    def network_status(
+        self,
+        exchange_id: str,
+        asset: str,
+        network: str,
+        *,
+        direction: str,
+    ) -> bool | None:
+        """Return deposit/withdraw status for a requested network.
+
+        True/False means the exchange explicitly reports a status. None means
+        the public CCXT metadata is insufficient to decide.
+        """
+        if direction not in {"deposit", "withdraw"}:
+            raise ValueError("direction must be deposit or withdraw")
+        requested = canonical_network(network)
+        if not requested:
+            return None
+
+        exchange = self.exchanges[exchange_id]
+        currencies = getattr(exchange, "currencies", {}) or {}
+        currency = currencies.get(asset.upper()) or currencies.get(asset)
+        if not isinstance(currency, dict):
+            return None
+
+        networks = currency.get("networks") or {}
+        if isinstance(networks, dict):
+            for key, metadata in networks.items():
+                if not isinstance(metadata, dict):
+                    continue
+                aliases = [
+                    str(key),
+                    str(metadata.get("id") or ""),
+                    str(metadata.get("network") or ""),
+                    str(metadata.get("name") or ""),
+                ]
+                if requested not in {canonical_network(item) for item in aliases if item}:
+                    continue
+
+                value = metadata.get(direction)
+                if isinstance(value, bool):
+                    return value
+                if metadata.get("active") is False:
+                    return False
+                return None
+
+        value = currency.get(direction)
+        if isinstance(value, bool):
+            return value
+        return None
 
     async def fetch_order_book(
         self,
