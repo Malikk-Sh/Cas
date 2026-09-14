@@ -47,7 +47,16 @@ class HybridRouteScanner:
         price = float(bids[0][0])
         return price if price > 0 else None
 
-    async def scan_exchange(self, exchange_id: str) -> list[HybridOpportunity]:
+    async def scan_exchange(
+        self,
+        exchange_id: str,
+        *,
+        start_amount: float | None = None,
+    ) -> list[HybridOpportunity]:
+        notional = self.start_amount if start_amount is None else start_amount
+        if notional <= 0:
+            return []
+
         markets = self.pool.market_map(exchange_id)
         opportunities: list[HybridOpportunity] = []
         fee_rate = self._fee_rate(exchange_id)
@@ -68,7 +77,7 @@ class HybridRouteScanner:
             if not first_book or not second_book:
                 continue
 
-            first_fill = simulate_buy(first_book.get("asks", []), self.start_amount)
+            first_fill = simulate_buy(first_book.get("asks", []), notional)
             if first_fill is None:
                 continue
             first_gross, first_vwap = first_fill
@@ -111,11 +120,9 @@ class HybridRouteScanner:
                     continue
                 final_gross, final_vwap = final_fill
                 final_after_fee = final_gross * (1.0 - fee_rate)
-                final_amount = (
-                    final_after_fee - self.start_amount * self.fixed_cost_rate
-                )
-                net_profit = final_amount - self.start_amount
-                net_profit_pct = (net_profit / self.start_amount) * 100
+                final_amount = final_after_fee - notional * self.fixed_cost_rate
+                net_profit = final_amount - notional
+                net_profit_pct = (net_profit / notional) * 100
 
                 first_detail = (
                     f"BUY {first_symbol} VWAP={first_vwap:.8f}; fee={fee_rate:.6f}"
@@ -141,7 +148,7 @@ class HybridRouteScanner:
                             second_asset,
                             self.anchor_asset,
                         ),
-                        start_amount=self.start_amount,
+                        start_amount=notional,
                         final_amount=final_amount,
                         net_profit_quote=net_profit,
                         net_profit_pct=net_profit_pct,
@@ -154,7 +161,7 @@ class HybridRouteScanner:
                                 "cex",
                                 self.anchor_asset,
                                 first_asset,
-                                self.start_amount,
+                                notional,
                                 first_net,
                                 first_detail,
                             ),
@@ -184,10 +191,16 @@ class HybridRouteScanner:
         return opportunities
 
     async def scan(
-        self, exchange_ids: Iterable[str]
+        self,
+        exchange_ids: Iterable[str],
+        *,
+        start_amount: float | None = None,
     ) -> list[HybridOpportunity]:
         nested = await asyncio.gather(
-            *(self.scan_exchange(exchange_id) for exchange_id in exchange_ids)
+            *(
+                self.scan_exchange(exchange_id, start_amount=start_amount)
+                for exchange_id in exchange_ids
+            )
         )
         found = [item for group in nested for item in group]
         found.sort(key=lambda item: item.net_profit_pct, reverse=True)
