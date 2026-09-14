@@ -1,3 +1,25 @@
-# Cas
+# CAS — Crypto Arbitrage Scanner
 
-Crypto arbitrage scanner project.
+Поиск межбиржевых spot-связок по публичным стаканам с учетом глубины, комиссий и Telegram-уведомлений.
+
+Подробная инструкция на русском: [`docs/README.ru.md`](docs/README.ru.md).
+
+## Quick start
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+cas-scanner
+```
+
+Или через Docker:
+
+```bash
+docker compose up --build
+```
+
+Сканер не совершает сделки и не требует API-ключей бирж. Он использует публичные стаканы, оценивает VWAP на заданный объем, примерные комиссии и дополнительный запас на издержки.
+
+> Важно: найденная связка не гарантирует прибыль. Перед реальной сделкой нужно повторно проверить ликвидность, комиссии, доступность ввода/вывода, задержки и фактическое проскальзывание.
