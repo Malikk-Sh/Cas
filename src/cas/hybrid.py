@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Iterable
 
+from cas.execution import validate_market_order
 from cas.external_quotes import QuoteProvider
 from cas.models import HybridLeg, HybridOpportunity
 from cas.scanner import simulate_buy, simulate_sell
@@ -24,6 +25,7 @@ class HybridRouteScanner:
         fixed_cost_rate: float,
         max_external_premium_pct: float,
         exchange_fee_rates: dict[str, float] | None = None,
+        require_network_status: bool = False,
     ) -> None:
         self.pool = pool
         self.anchor_asset = anchor_asset.upper()
@@ -35,6 +37,7 @@ class HybridRouteScanner:
         self.fixed_cost_rate = fixed_cost_rate
         self.max_external_premium_pct = max_external_premium_pct
         self.exchange_fee_rates = exchange_fee_rates or {}
+        self.require_network_status = require_network_status
 
     def _fee_rate(self, exchange_id: str) -> float:
         return self.exchange_fee_rates.get(exchange_id, self.taker_fee_rate)
@@ -46,6 +49,42 @@ class HybridRouteScanner:
             return None
         price = float(bids[0][0])
         return price if price > 0 else None
+
+    def _normalize_amount(
+        self,
+        exchange_id: str,
+        symbol: str,
+        amount: float,
+    ) -> float | None:
+        normalize = getattr(self.pool, "normalize_amount", None)
+        if normalize is None:
+            return amount if amount > 0 else None
+        return normalize(exchange_id, symbol, amount)
+
+    def _network_usable(
+        self,
+        exchange_id: str,
+        asset: str,
+        network: str,
+        *,
+        direction: str,
+    ) -> bool:
+        if not network:
+            return not self.require_network_status
+        getter = getattr(self.pool, "network_status", None)
+        if getter is None:
+            return not self.require_network_status
+        status = getter(
+            exchange_id,
+            asset,
+            network,
+            direction=direction,
+        )
+        if status is False:
+            return False
+        if status is None and self.require_network_status:
+            return False
+        return True
 
     async def scan_exchange(
         self,
@@ -67,6 +106,8 @@ class HybridRouteScanner:
             if first_symbol not in markets or second_symbol not in markets:
                 continue
 
+            first_market = markets[first_symbol]
+            second_market = markets[second_symbol]
             books = await self.pool.fetch_exchange_books(
                 exchange_id,
                 [first_symbol, second_symbol],
@@ -81,7 +122,21 @@ class HybridRouteScanner:
             if first_fill is None:
                 continue
             first_gross, first_vwap = first_fill
-            first_net = first_gross * (1.0 - fee_rate)
+            first_exec = self._normalize_amount(
+                exchange_id,
+                first_symbol,
+                first_gross,
+            )
+            if first_exec is None:
+                continue
+            first_check = validate_market_order(
+                first_market,
+                amount=first_exec,
+                cost=first_exec * first_vwap,
+            )
+            if not first_check.ok:
+                continue
+            first_net = first_exec * (1.0 - fee_rate)
 
             quotes = await asyncio.gather(
                 *(
@@ -94,10 +149,41 @@ class HybridRouteScanner:
                 if isinstance(quote, Exception) or quote is None:
                     continue
 
+                if not self._network_usable(
+                    exchange_id,
+                    first_asset,
+                    quote.input_network,
+                    direction="withdraw",
+                ):
+                    continue
+                if not self._network_usable(
+                    exchange_id,
+                    second_asset,
+                    quote.output_network,
+                    direction="deposit",
+                ):
+                    continue
+
                 external_output = quote.output_amount
+                final_exec = self._normalize_amount(
+                    exchange_id,
+                    second_symbol,
+                    external_output,
+                )
+                if final_exec is None:
+                    continue
+
                 first_bid = self._best_bid(first_book)
                 second_bid = self._best_bid(second_book)
                 if first_bid is None or second_bid is None:
+                    continue
+
+                final_check = validate_market_order(
+                    second_market,
+                    amount=final_exec,
+                    cost=final_exec * second_bid,
+                )
+                if not final_check.ok:
                     continue
 
                 input_value = first_net * first_bid
@@ -114,7 +200,8 @@ class HybridRouteScanner:
                     )
 
                 final_fill = simulate_sell(
-                    second_book.get("bids", []), external_output
+                    second_book.get("bids", []),
+                    final_exec,
                 )
                 if final_fill is None:
                     continue
@@ -136,6 +223,10 @@ class HybridRouteScanner:
                 final_detail = (
                     f"SELL {second_symbol} VWAP={final_vwap:.8f}; fee={fee_rate:.6f}"
                 )
+                if final_exec < external_output:
+                    final_detail += (
+                        f"; precision_dust={external_output - final_exec:.12g} {second_asset}"
+                    )
 
                 opportunities.append(
                     HybridOpportunity.now(
@@ -179,7 +270,7 @@ class HybridRouteScanner:
                                 "cex",
                                 second_asset,
                                 self.anchor_asset,
-                                external_output,
+                                final_exec,
                                 final_after_fee,
                                 final_detail,
                             ),
