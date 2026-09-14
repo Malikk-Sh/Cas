@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     hybrid_min_net_profit_pct: float = Field(default=0.20)
     hybrid_max_external_premium_pct: float = Field(default=5.0, ge=0.0)
     hybrid_allow_suspicious: bool = False
+    hybrid_require_network_status: bool = False
     external_quote_providers_json: str = "[]"
 
     p2p_enabled: bool = False
