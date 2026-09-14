@@ -61,6 +61,7 @@ async def run() -> None:
         fixed_cost_rate=settings.fixed_cost_rate,
         max_external_premium_pct=settings.hybrid_max_external_premium_pct,
         exchange_fee_rates=settings.exchange_taker_fee_rates,
+        require_network_status=settings.hybrid_require_network_status,
     )
     p2p_source = BybitP2PSource(
         api_key=settings.bybit_p2p_api_key,
