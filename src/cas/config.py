@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     hybrid_allow_suspicious: bool = False
     external_quote_providers_json: str = "[]"
 
+    p2p_enabled: bool = False
+    bybit_p2p_api_key: str = ""
+    bybit_p2p_api_secret: str = ""
+    bybit_p2p_testnet: bool = False
+    p2p_fiat_currency: str = "RUB"
+    p2p_token: str = "USDT"
+    p2p_fiat_amount: float = Field(default=70_000.0, gt=0)
+    p2p_min_completion_rate: float = Field(default=90.0, ge=0.0, le=100.0)
+    p2p_min_recent_orders: int = Field(default=10, ge=0)
+    p2p_require_verified_advertiser: bool = True
+    p2p_page_size: int = Field(default=100, ge=1, le=300)
+
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
