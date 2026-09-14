@@ -29,6 +29,6 @@ cas-scanner = "cas.main:main"
 packages = ["src/cas"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
